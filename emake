@@ -1,14 +1,15 @@
 #!/usr/bin/env escript
 
--type rebarconfig() :: [{atom(), term()}, ...].
+-type rebar_config() :: [{atom(), term()}, ...].
 
 main(_) ->
     RebarConfig = rebar_config(),
-    EbinMakefile = ebin_makefile(RebarConfig),
+    SrcFiles = src_files(RebarConfig),
+    EbinMakefile = ebin_makefile(SrcFiles, RebarConfig),
     ok = file:write_file("ebin/Makefile", EbinMakefile).
 
 
-ebin_makefile(RebarConfig) ->
+ebin_makefile(SrcFiles, RebarConfig) ->
     ErlOpts = proplists:get_value(erl_opts, RebarConfig, []),
     ErlOptsLine = [io_lib:format("+~s", [Opt]) || Opt <- ErlOpts],
 
@@ -24,6 +25,10 @@ ebin_makefile(RebarConfig) ->
         "\terlc " ++ Args ++ " $(SRCDIR)/$*.erl\n"
     ].
 
+-spec src_files(rebar_config()) -> list(string()).
+src_files(_RebarConfig) ->
+    ["ok"].
+
 preamble() ->
     [
         "THISDIR := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))\n\n",
@@ -32,7 +37,6 @@ preamble() ->
     ].
 
 
--spec rebar_config() -> rebarconfig().
 rebar_config() ->
     case file:consult("rebar.config") of
         {ok, Stuff} -> Stuff;
@@ -50,5 +54,42 @@ join([Last], _Sep, Acc) ->
     lists:reverse([Last|Acc]);
 join([Item|Rest], Sep, Acc) ->
     join(Rest, Sep, [Sep, Item | Acc]).
+
+%% @doc Look for include files. Copied from rebar_erlc_compiler.erl
+-spec inspect_epp(pid(), file:name(), file:name(),
+                  [string()]) -> {string(), [file:name()]}.
+inspect_epp(Epp, Source, Module, Includes) ->
+    case epp:parse_erl_form(Epp) of
+        {ok, {attribute, _, module, ModInfo}} ->
+            ActualModuleStr =
+                case ModInfo of
+                    %% Typical module name, single atom
+                    ActualModule when is_atom(ActualModule) ->
+                        atom_to_list(ActualModule);
+                    %% Packag-ized module name, list of atoms
+                    ActualModule when is_list(ActualModule) ->
+                        string:join([atom_to_list(P) ||
+                                        P <- ActualModule], ".");
+                    %% Parameterized module name, single atom
+                    {ActualModule, _} when is_atom(ActualModule) ->
+                        atom_to_list(ActualModule);
+                    %% Parameterized and packagized module name, list of atoms
+                    {ActualModule, _} when is_list(ActualModule) ->
+                        string:join([atom_to_list(P) ||
+                                        P <- ActualModule], ".")
+                end,
+            inspect_epp(Epp, Source, ActualModuleStr, Includes);
+        {ok, {attribute, 1, file, {Module, 1}}} ->
+            inspect_epp(Epp, Source, Module, Includes);
+        {ok, {attribute, 1, file, {Source, 1}}} ->
+            inspect_epp(Epp, Source, Module, Includes);
+        {ok, {attribute, 1, file, {IncFile, 1}}} ->
+            inspect_epp(Epp, Source, Module, [IncFile | Includes]);
+        {eof, _} ->
+            epp:close(Epp),
+            {Module, Includes};
+        _ ->
+            inspect_epp(Epp, Source, Module, Includes)
+    end.
 
 % vim: ft=erlang:ts=4:sw=4:et
