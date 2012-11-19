@@ -1,0 +1,54 @@
+#!/usr/bin/env escript
+
+-type rebarconfig() :: [{atom(), term()}, ...].
+
+main(_) ->
+    RebarConfig = rebar_config(),
+    EbinMakefile = ebin_makefile(RebarConfig),
+    ok = file:write_file("ebin/Makefile", EbinMakefile).
+
+
+ebin_makefile(RebarConfig) ->
+    ErlOpts = proplists:get_value(erl_opts, RebarConfig, []),
+    ErlOptsLine = [io_lib:format("+~s", [Opt]) || Opt <- ErlOpts],
+
+    Args = join(["-I $(INCLUDEDIR)"] ++ ErlOptsLine, " "),
+
+    [
+        preamble(),
+        "SRCS := $(wildcard $(SRCDIR)/*.erl)\n",
+        "BEAMS := $(notdir $(SRCS:.erl=.beam))\n",
+        ".PHONY: all\n\n",
+        "all: $(BEAMS)\n\n",
+        "%.beam: $(SRCDIR)/%.erl\n",
+        "\terlc " ++ Args ++ " $(SRCDIR)/$*.erl\n"
+    ].
+
+preamble() ->
+    [
+        "THISDIR := $(realpath $(dir $(lastword $(MAKEFILE_LIST))))\n\n",
+        "INCLUDEDIR := $(THISDIR)/../include\n",
+        "SRCDIR := $(THISDIR)/../src\n"
+    ].
+
+
+-spec rebar_config() -> rebarconfig().
+rebar_config() ->
+    case file:consult("rebar.config") of
+        {ok, Stuff} -> Stuff;
+        {error, enoent} -> []
+    end.
+
+%% @doc like string:join, but allow arbitrary items and separators
+-spec join(list(I), Sep) -> list(I | Sep) when Sep :: term(), I :: term().
+join(List, Sep) ->
+    join(List, Sep, []).
+
+join([], _, _) ->
+    [];
+join([Last], _Sep, Acc) ->
+    lists:reverse([Last|Acc]);
+join([Item|Rest], Sep, Acc) ->
+    join(Rest, Sep, [Sep, Item | Acc]).
+
+% vim: ft=erlang:ts=4:sw=4:et
